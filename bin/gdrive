@@ -2,15 +2,12 @@
 
 """
 gdrive: Git-like command-line interface for Google Drive
+Main router that delegates to individual command files
 """
 
-import os
 import sys
-
-# Add current directory to path to find gdrive module
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from gdrive import GDriveCLI, error_exit, get_program_name, requires_workspace
+import subprocess
+import os
 
 def show_help():
     """Show main help message"""
@@ -43,246 +40,50 @@ Examples:
 Run 'gdrive <command> --help' for more information on a command.
 """)
 
-def cmd_init():
-    """Handle 'gdrive init' command"""
-    folder_name = None
-    if len(sys.argv) == 3:
-        folder_name = sys.argv[2]
-    elif len(sys.argv) > 3:
-        print("usage: gdrive init [folder-name]", file=sys.stderr)
-        sys.exit(1)
-    
-    try:
-        drive = GDriveCLI()
-        remote_folder_id = drive.init_workspace(folder_name)
-        
-        print(f"Initialized gdrive workspace")
-        print(f"Remote folder: {drive.config['folder_name']}")
-        print(f"Folder ID: {remote_folder_id}")
-        
-        drive.close()
-    
-    except Exception as e:
-        error_exit("gdrive init", str(e))
-
-@requires_workspace
-def cmd_ls():
-    """Handle 'gdrive ls' command"""
-    name_filter = None
-    file_type = None
-    
-    i = 2
-    while i < len(sys.argv):
-        if sys.argv[i] == '--name' and i + 1 < len(sys.argv):
-            name_filter = sys.argv[i + 1]
-            i += 2
-        elif sys.argv[i] == '--type' and i + 1 < len(sys.argv):
-            file_type = sys.argv[i + 1]
-            i += 2
-        elif sys.argv[i] == '--help':
-            print("""usage: gdrive ls [options]
-
-List files in Google Drive workspace.
-
-Options:
-    --name <filter>    Filter files by name
-    --type <type>      Filter by type (folder, document, sheet)
-    
-Examples:
-    gdrive ls
-    gdrive ls --name "README"
-    gdrive ls --type document
-""")
-            sys.exit(0)
-        else:
-            error_exit("gdrive ls", f"unknown option: {sys.argv[i]}")
-    
-    try:
-        drive = GDriveCLI()
-        
-        files = drive.list_drive_files(
-            name_filter=name_filter,
-            file_type=file_type
-        )
-        
-        if not files:
-            print("No files found")
-            return
-        
-        print(f"{'Name':<30} {'Type':<20} {'Size':<10} {'ID'}")
-        print("-" * 70)
-        
-        for file in files:
-            name = file['name'][:28] + '..' if len(file['name']) > 30 else file['name']
-            file_type = file['mimeType'].split('.')[-1] if file['mimeType'] else 'unknown'
-            size = drive.format_file_size(file.get('size'))
-            file_id = file['id'][:10] + '..'
-            
-            print(f"{name:<30} {file_type:<20} {size:<10} {file_id}")
-        
-        drive.close()
-    
-    except Exception as e:
-        error_exit("gdrive ls", str(e))
-
-@requires_workspace
-def cmd_add():
-    """Handle 'gdrive add' command"""
-    if len(sys.argv) < 3:
-        print("usage: gdrive add <local-file> [remote-name]", file=sys.stderr)
-        sys.exit(1)
-    
-    local_file = sys.argv[2]
-    remote_name = sys.argv[3] if len(sys.argv) > 3 else None
-    
-    if not os.path.exists(local_file):
-        error_exit("gdrive add", f"file not found: {local_file}")
-    
-    try:
-        drive = GDriveCLI()
-        
-        # Upload file
-        result = drive.upload_file(local_file, remote_name)
-        
-        # Track the file
-        drive.track_file(local_file, result['id'], result['name'])
-        
-        print(f"Added '{local_file}' to Google Drive")
-        print(f"Remote name: {result['name']}")
-        print(f"File ID: {result['id']}")
-        
-        drive.close()
-    
-    except Exception as e:
-        error_exit("gdrive add", str(e))
-
-@requires_workspace
-def cmd_cat():
-    """Handle 'gdrive cat' command"""
-    if len(sys.argv) < 3:
-        print("usage: gdrive cat <file>", file=sys.stderr)
-        sys.exit(1)
-    
-    filename = sys.argv[2]
-    
-    try:
-        drive = GDriveCLI()
-        
-        # Find file by name in current workspace
-        files = drive.list_drive_files(name_filter=filename)
-        
-        if not files:
-            error_exit("gdrive cat", f"file not found: {filename}")
-        
-        # Use first match
-        file = files[0]
-        content = drive.get_file_content(file['id'])
-        print(content)
-        
-        drive.close()
-    
-    except Exception as e:
-        error_exit("gdrive cat", str(e))
-
-@requires_workspace
-def cmd_status():
-    """Handle 'gdrive status' command"""
-    try:
-        drive = GDriveCLI()
-        
-        tracked_files = drive.get_tracked_files()
-        
-        if not tracked_files:
-            print("No files tracked")
-            return
-        
-        print("Tracked files:")
-        print(f"{'Local Path':<30} {'Remote Name':<30} {'Status'}")
-        print("-" * 80)
-        
-        for file_info in tracked_files:
-            local_path = file_info['local_path']
-            remote_name = file_info['remote_name'] or 'N/A'
-            
-            # Check if local file still exists
-            if os.path.exists(local_path):
-                status = "OK"
-            else:
-                status = "MISSING"
-            
-            print(f"{local_path:<30} {remote_name:<30} {status}")
-        
-        drive.close()
-    
-    except Exception as e:
-        error_exit("gdrive status", str(e))
-
-@requires_workspace
-def cmd_rm():
-    """Handle 'gdrive rm' command"""
-    if len(sys.argv) < 3:
-        print("usage: gdrive rm <file>", file=sys.stderr)
-        sys.exit(1)
-    
-    filename = sys.argv[2]
-    
-    try:
-        drive = GDriveCLI()
-        
-        # Find file by name
-        files = drive.list_drive_files(name_filter=filename)
-        
-        if not files:
-            error_exit("gdrive rm", f"file not found: {filename}")
-        
-        # Use first match
-        file = files[0]
-        
-        # Confirm deletion
-        response = input(f"Delete '{file['name']}' from Google Drive? (y/N): ")
-        if response.lower() != 'y':
-            print("Aborted")
-            return
-        
-        # Delete from Drive
-        drive.delete_file(file['id'])
-        print(f"Deleted '{file['name']}' from Google Drive")
-        
-        # TODO: Untrack if locally tracked
-        
-        drive.close()
-    
-    except Exception as e:
-        error_exit("gdrive rm", str(e))
-
 def main():
-    """Main entry point"""
+    """Main router function"""
     if len(sys.argv) < 2:
         show_help()
         sys.exit(1)
     
     command = sys.argv[1]
     
-    # Handle help
     if command in ['-h', '--help', 'help']:
         show_help()
         sys.exit(0)
     
-    # Route to command handlers
-    commands = {
-        'init': cmd_init,
-        'ls': cmd_ls,
-        'add': cmd_add,
-        'cat': cmd_cat,
-        'status': cmd_status,
-        'rm': cmd_rm,
+    command_map = {
+        'init': 'gdrive-init',
+        'ls': 'gdrive-ls', 
+        'add': 'gdrive-add-remote',
+        'cat': 'gdrive-cat',
+        'rm': 'gdrive-rm',
+        'status': 'gdrive-status',
+        'push': 'gdrive-push',
+        'pull': 'gdrive-pull',
+        'checkout': 'gdrive-checkout',
+        'branch': 'gdrive-branch',
+        'view': 'gdrive-view-files'
     }
     
-    if command in commands:
-        commands[command]()
-    else:
+    if command not in command_map:
         print(f"gdrive: '{command}' is not a gdrive command.", file=sys.stderr)
         print("See 'gdrive --help' for available commands.", file=sys.stderr)
+        sys.exit(1)
+    
+    actual_command = command_map[command]
+    
+    if not subprocess.run(['which', actual_command], capture_output=True).returncode == 0:
+        print(f"gdrive: command '{actual_command}' not found or not implemented yet.", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        result = subprocess.run([actual_command] + sys.argv[2:])
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        sys.exit(1)
+    except Exception as e:
+        print(f"gdrive: error executing {actual_command}: {e}", file=sys.stderr)
         sys.exit(1)
 
 if __name__ == '__main__':

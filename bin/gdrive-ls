@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+
+"""
+gdrive-ls: List files in Google Drive
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from gdrive import GDriveCLI, error_exit, get_program_name, requires_workspace
+
+@requires_workspace
+def main():
+    program_name = get_program_name()
+    
+    name_filter = None
+    file_type = None
+    
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i] == '--name' and i + 1 < len(sys.argv):
+            name_filter = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == '--type' and i + 1 < len(sys.argv):
+            file_type = sys.argv[i + 1]
+            i += 2
+        else:
+            error_exit(program_name, f"unknown option: {sys.argv[i]}")
+    
+    try:
+        drive = GDriveCLI()
+        
+        files = drive.list_drive_files(
+            name_filter=name_filter,
+            file_type=file_type
+        )
+        
+        if not files:
+            print("No files found")
+            return
+        
+        print(f"{'Name':<30} {'Type':<20} {'Size':<10} {'ID'}")
+        print("-" * 70)
+        
+        for file in files:
+            name = file['name'][:28] + '..' if len(file['name']) > 30 else file['name']
+            file_type = file['mimeType'].split('.')[-1] if file['mimeType'] else 'unknown'
+            size = drive.format_file_size(file.get('size'))
+            file_id = file['id'][:10] + '..'
+            
+            print(f"{name:<30} {file_type:<20} {size:<10} {file_id}")
+        
+        drive.close()
+    
+    except Exception as e:
+        error_exit(program_name, str(e))
+
+if __name__ == '__main__':
+    main()

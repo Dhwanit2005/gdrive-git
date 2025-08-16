@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+
+"""
+gdrive-init: Initialize Google Drive workspace
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from gdrive import GDriveCLI, error_exit, get_program_name
+
+def main():
+    program_name = get_program_name()
+    
+    folder_name = None
+    if len(sys.argv) == 2:
+        folder_name = sys.argv[1]
+    elif len(sys.argv) > 2:
+        print(f"usage: {program_name} [folder-name]", file=sys.stderr)
+        sys.exit(1)
+    
+    try:
+        drive = GDriveCLI()
+        remote_folder_id = drive.init_workspace(folder_name)
+        
+        print(f"Initialized gdrive workspace")
+        print(f"Remote folder: {drive.config['folder_name']}")
+        print(f"Folder ID: {remote_folder_id}")
+        
+        drive.close()
+    
+    except Exception as e:
+        error_exit(program_name, str(e))
+
+if __name__ == '__main__':
+    main()

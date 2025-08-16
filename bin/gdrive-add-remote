@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+
+"""
+gdrive-add-remote: Upload local file to Google Drive
+"""
+
+import os
+import sys
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from gdrive import GDriveCLI, error_exit, get_program_name, requires_workspace
+
+@requires_workspace
+def main():
+    program_name = get_program_name()
+    
+    if len(sys.argv) < 2:
+        print(f"usage: {program_name} <local-file> [remote-name]", file=sys.stderr)
+        sys.exit(1)
+    
+    local_file = sys.argv[1]
+    remote_name = sys.argv[2] if len(sys.argv) > 2 else None
+    
+    if not os.path.exists(local_file):
+        error_exit(program_name, f"file not found: {local_file}")
+    
+    try:
+        drive = GDriveCLI()
+        
+        # Upload file
+        result = drive.upload_file(local_file, remote_name)
+        
+        # Track the file
+        drive.track_file(local_file, result['id'], result['name'])
+        
+        print(f"Uploaded '{local_file}' to Google Drive")
+        print(f"Remote name: {result['name']}")
+        print(f"File ID: {result['id']}")
+        
+        drive.close()
+    
+    except Exception as e:
+        error_exit(program_name, str(e))
+
+if __name__ == '__main__':
+    main()

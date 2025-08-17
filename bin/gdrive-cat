@@ -7,7 +7,6 @@ gdrive-cat: Display file content from Google Drive
 import os
 import sys
 
-# Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gdrive import GDriveCLI, error_exit, get_program_name, requires_workspace
@@ -40,20 +39,16 @@ Examples:
     try:
         drive = GDriveCLI()
         
-        # Find file by name in current workspace
         files = drive.list_drive_files(name_filter=filename)
         
         if not files:
             error_exit(program_name, f"file not found: {filename}")
         
-        # Use first match
         file = files[0]
         
-        # Show which file we're displaying if multiple matches
         if len(files) > 1:
             print(f"# Displaying: {file['name']} (found {len(files)} matches)", file=sys.stderr)
         
-        # Get and display content
         content = drive.get_file_content(file['id'])
         print(content)
         

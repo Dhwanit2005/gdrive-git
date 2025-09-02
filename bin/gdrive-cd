@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+
+"""
+gdrive-cd: Change directory within Google Drive workspace
+Enhanced version with path support, shortcuts, and better navigation
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from gdrive import GDriveCLI, error_exit, get_program_name, requires_workspace
+
+@requires_workspace
+def main():
+    program_name = get_program_name()
+    
+    if len(sys.argv) < 2:
+        # No arguments - show current directory
+        try:
+            drive = GDriveCLI()
+            current_path = get_current_path(drive)
+            current_name = drive.config.get('current_folder_name', drive.config['folder_name'])
+            print(f"Current directory: {current_name}")
+            print(f"Path: {current_path}")
+            drive.close()
+        except Exception as e:
+            error_exit(program_name, str(e))
+        sys.exit(0)
+    
+    if sys.argv[1] == '--help':
+        print(f"""usage: {program_name} [<folder>]
+
+Change the current directory within Google Drive workspace.
+
+Arguments:
+    <folder>    Name or path to navigate to
+    ..          Go up one level (to parent folder)
+    .           Stay in current directory
+    /           Go to workspace root folder
+    ~           Go to workspace root folder (alias for /)
+    -           Go to previous directory
+    
+Path support:
+    You can use paths with / separators:
+    - "folder1/folder2"     Navigate through folders
+    - "/folder1/folder2"    Absolute path from root
+    - "../sibling"          Go up and into sibling
+    - "../../folder"        Go up two levels
+
+Examples:
+    {program_name}                  # Show current directory
+    {program_name} "My Folder"       # Go to folder by name
+    {program_name} Projects/2024     # Navigate path
+    {program_name} /Archive/Old      # Absolute path from root
+    {program_name} ..                # Go to parent
+    {program_name} -                 # Go to previous directory
+""")
+        sys.exit(0)
+    
+    target = sys.argv[1]
+    
+    try:
+        drive = GDriveCLI()
+        
+        # Store current folder as previous before changing
+        current_folder_id = drive.config.get('current_folder_id', drive.config['remote_folder_id'])
+        current_folder_name = drive.config.get('current_folder_name', drive.config['folder_name'])
+        
+        # Handle shortcuts
+        if target == "/" or target == "~":
+            new_folder_id = drive.config['remote_folder_id']
+            new_folder_name = drive.config['folder_name']
+            
+        elif target == "-":
+            # Go to previous directory
+            prev_id = drive.config.get('previous_folder_id')
+            if not prev_id:
+                error_exit(program_name, "no previous directory")
+            new_folder_id = prev_id
+            new_folder_name = drive.config.get('previous_folder_name', 'Unknown')
+            
+        elif target == ".":
+            # Stay in current directory
+            new_folder_id = current_folder_id
+            new_folder_name = current_folder_name
+            
+        elif "/" in target or target == "..":
+            # Handle path navigation
+            new_folder_id = navigate_path(drive, target)
+            if new_folder_id:
+                metadata = drive.get_file_metadata(new_folder_id)
+                new_folder_name = metadata['name']
+            else:
+                error_exit(program_name, f"path not found: {target}")
+                
+        else:
+            # Simple folder name navigation
+            new_folder_id, new_folder_name = navigate_to_folder(drive, target, current_folder_id)
+        
+        # Update configuration
+        if new_folder_id != current_folder_id:
+            # Save previous directory
+            drive.config['previous_folder_id'] = current_folder_id
+            drive.config['previous_folder_name'] = current_folder_name
+        
+        drive.config['current_folder_id'] = new_folder_id
+        drive.config['current_folder_name'] = new_folder_name
+        drive.save_config()
+        
+        # Show result
+        new_path = get_current_path(drive)
+        print(f"Changed to: {new_folder_name}")
+        if new_path != "/" and new_path != f"/{new_folder_name}":
+            print(f"Path: {new_path}")
+        
+        # If there are items in this folder, show a count
+        items = drive.list_drive_files(folder_id=new_folder_id)
+        if items:
+            folders = [i for i in items if i['mimeType'] == 'application/vnd.google-apps.folder']
+            files = [i for i in items if i['mimeType'] != 'application/vnd.google-apps.folder']
+            counts = []
+            if folders:
+                counts.append(f"{len(folders)} folder{'s' if len(folders) != 1 else ''}")
+            if files:
+                counts.append(f"{len(files)} file{'s' if len(files) != 1 else ''}")
+            if counts:
+                print(f"Contains: {', '.join(counts)}")
+        
+        drive.close()
+        
+    except Exception as e:
+        error_exit(program_name, str(e))
+
+
+def navigate_path(drive, path):
+    """Navigate to a path like 'folder1/folder2' or '../folder'"""
+    
+    # Determine starting point
+    if path.startswith('/'):
+        # Absolute path from root
+        current_id = drive.config['remote_folder_id']
+        path = path[1:]  # Remove leading /
+    else:
+        # Relative path from current directory
+        current_id = drive.config.get('current_folder_id', drive.config['remote_folder_id'])
+    
+    if not path:
+        return current_id
+    
+    # Split path and navigate each part
+    parts = path.split('/')
+    
+    for part in parts:
+        if not part:  # Skip empty parts (e.g., from //)
+            continue
+            
+        if part == '..':
+            # Navigate to parent
+            current_id = get_parent_folder(drive, current_id)
+            if not current_id:
+                return None
+                
+        elif part == '.':
+            # Stay in current folder
+            continue
+            
+        else:
+            # Navigate to child folder
+            current_id = get_child_folder(drive, current_id, part)
+            if not current_id:
+                return None
+    
+    return current_id
+
+
+def get_parent_folder(drive, folder_id):
+    """Get the parent folder ID"""
+    
+    # Don't go above workspace root
+    if folder_id == drive.config['remote_folder_id']:
+        return None
+    
+    try:
+        metadata = drive.get_file_metadata(folder_id)
+        parents = metadata.get('parents', [])
+        
+        if parents:
+            return parents[0]
+    except:
+        pass
+    
+    return None
+
+
+def get_child_folder(drive, parent_id, folder_name):
+    """Get a child folder by name within a parent"""
+    
+    folders = drive.list_drive_files(
+        folder_id=parent_id,
+        file_type='folder'
+    )
+    
+    # First try exact match
+    for folder in folders:
+        if folder['name'] == folder_name:
+            return folder['id']
+    
+    # Then try case-insensitive match
+    folder_name_lower = folder_name.lower()
+    for folder in folders:
+        if folder['name'].lower() == folder_name_lower:
+            return folder['id']
+    
+    # Finally try partial match
+    for folder in folders:
+        if folder_name_lower in folder['name'].lower():
+            return folder['id']
+    
+    return None
+
+
+def navigate_to_folder(drive, folder_name, current_folder_id):
+    """Navigate to a folder by name in the current directory"""
+    
+    folders = drive.list_drive_files(
+        folder_id=current_folder_id,
+        file_type='folder'
+    )
+    
+    if not folders:
+        error_exit(get_program_name(), f"no folders found in current directory")
+    
+    # Try exact match first
+    for folder in folders:
+        if folder['name'] == folder_name:
+            return folder['id'], folder['name']
+    
+    # Try case-insensitive match
+    folder_name_lower = folder_name.lower()
+    for folder in folders:
+        if folder['name'].lower() == folder_name_lower:
+            return folder['id'], folder['name']
+    
+    # Try partial match
+    matches = []
+    for folder in folders:
+        if folder_name_lower in folder['name'].lower():
+            matches.append(folder)
+    
+    if not matches:
+        error_exit(get_program_name(), f"folder not found: {folder_name}")
+    
+    if len(matches) == 1:
+        return matches[0]['id'], matches[0]['name']
+    
+    # Multiple matches - show them and use first
+    print(f"Multiple matches found:", file=sys.stderr)
+    for i, folder in enumerate(matches[:5]):  # Show max 5
+        print(f"  {i+1}. {folder['name']}", file=sys.stderr)
+    if len(matches) > 5:
+        print(f"  ... and {len(matches)-5} more", file=sys.stderr)
+    print(f"Using: {matches[0]['name']}", file=sys.stderr)
+    
+    return matches[0]['id'], matches[0]['name']
+
+
+def get_current_path(drive):
+    """Get the current path from root to current folder"""
+    
+    current_id = drive.config.get('current_folder_id', drive.config['remote_folder_id'])
+    
+    # If we're at root, return /
+    if current_id == drive.config['remote_folder_id']:
+        return "/"
+    
+    path_parts = []
+    visited = set()  # Prevent infinite loops
+    
+    while current_id and current_id != drive.config['remote_folder_id']:
+        if current_id in visited:
+            break
+        visited.add(current_id)
+        
+        try:
+            metadata = drive.get_file_metadata(current_id)
+            path_parts.insert(0, metadata['name'])
+            parents = metadata.get('parents', [])
+            if not parents:
+                break
+            current_id = parents[0]
+        except:
+            break
+    
+    return "/" + "/".join(path_parts) if path_parts else "/"
+
+
+if __name__ == '__main__':
+    main()
